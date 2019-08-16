@@ -14,14 +14,12 @@ The following comparison demonstrates the improvement in image quality.
 ![demo-sdf16](https://cloud.githubusercontent.com/assets/18639794/14770360/20c51156-0a70-11e6-8f03-ed7632d07997.png)
 ![demo-sdf32](https://cloud.githubusercontent.com/assets/18639794/14770361/251a4406-0a70-11e6-95a7-e30e235ac729.png)
 
-## New in version 1.2
- - Option to specify that shape is defined in reverse order (-reverseorder)
- - Option to set a seed for the edge coloring heuristic (-seed \<n\>), which can be used to adjust the output
- - Fixed parsing of glyph contours starting that start with a curve control point.
+- To learn more about this method, you can read my [Master's thesis](https://github.com/Chlumsky/msdfgen/files/3050967/thesis.pdf).
+- Check what's new in the [changelog](CHANGELOG.md).
 
 ## Getting started
 
-The project can be used either as a library or as a console program. is divided into two parts, **[core](core)**
+The project can be used either as a library or as a console program. It is divided into two parts, **[core](core)**
 and **[extensions](ext)**. The core module has no dependencies and only uses bare C++. It contains all
 key data structures and algorithms, which can be accessed through the [msdfgen.h](msdfgen.h) header.
 Extensions contain utilities for loading fonts and SVG files, as well as saving PNG images.
@@ -32,7 +30,9 @@ and [LodePNG](http://lodev.org/lodepng/).
 
 Additionaly, there is the [main.cpp](main.cpp), which wraps the functionality into
 a comprehensive standalone console program. To start using the program immediately,
-a Windows binary of this program, [msdfgen.exe](msdfgen.exe), is available in the root directory.
+there is a Windows binary available for download in the ["Releases" section](https://github.com/Chlumsky/msdfgen/releases).
+To build the project, you may use the included [Visual Studio solution](Msdfgen.sln)
+or [CMake script](CMakeLists.txt).
 
 ## Console commands
 
@@ -51,7 +51,7 @@ The input can be specified as one of:
  - **-font \<filename.ttf\> \<character code\>** &ndash; to load a glyph from a font file.
    Character code can be expressed as either a decimal (63) or hexadecimal (0x3F) Unicode value, or an ASCII character
    in single quotes ('?').
- - **-svg \<filename.svg\>** &ndash; to load an SVG file. Note that only the first vector path in the file will be used.
+ - **-svg \<filename.svg\>** &ndash; to load an SVG file. Note that only the last vector path in the file will be used.
  - **-shapedesc \<filename.txt\>**, -defineshape \<definition\>, -stdin &ndash; to load a text description of the shape
    from either a file, the next argument, or the standard input, respectively. Its syntax is documented further down.
 
@@ -62,11 +62,11 @@ Some of the important ones are:
  - **-size \<width\> \<height\>** &ndash; specifies the dimensions of the output distance field (in pixels).
  - **-range \<range\>**, **-pxrange \<range\>** &ndash; specifies the width of the range around the shape
    between the minimum and maximum representable signed distance in shape units or distance field pixels, respectivelly.
- - **-autoframe** &ndash; automatically frames the shape to fit the distance field. If the output must be precisely aligned,
-   you should manually position it using -translate and -scale instead.
  - **-scale \<scale\>** &ndash; sets the scale used to convert shape units to distance field pixels.
  - **-translate \<x\> \<y\>** &ndash; sets the translation of the shape in shape units. Otherwise the origin (0, 0)
    lies in the bottom left corner.
+ - **-autoframe** &ndash; automatically frames the shape to fit the distance field. If the output must be precisely aligned,
+   you should manually position it using -translate and -scale instead.
  - **-angle \<angle\>** &ndash; specifies the maximum angle to be considered a corner.
    Can be expressed in radians (3.0) or degrees with D at the end (171.9D).
  - **-testrender \<filename.png\> \<width\> \<height\>** - tests the generated distance field by using it to render an image
@@ -84,6 +84,8 @@ msdfgen.exe msdf -font C:\Windows\Fonts\arialbd.ttf 'M' -o msdf.png -size 32 32 
 will take the glyph capital M from the Arial Bold typeface, generate a 32&times;32 multi-channel distance field
 with a 4 pixels wide distance range, store it into msdf.png, and create a test render of the glyph as render.png.
 
+**Note:** Do not use `-autoframe` to generate character maps! It is intended as a quick preview only.
+
 ## Library API
 
 If you choose to use this utility inside your own program, there are a few simple steps you need to perform
@@ -91,7 +93,7 @@ in order to generate a distance field. Please note that all classes and function
 
  - Acquire a `Shape` object. You can either load it via `loadGlyph` or `loadSvgShape`, or construct it manually.
    It consists of closed contours, which in turn consist of edges. An edge is represented by a `LinearEdge`, `QuadraticEdge`,
-   or `CubicEdge`. You can construct them from two endpoints and 0 to 2 Bézier control points.
+   or `CubicEdge`. You can construct them from two endpoints and 0 to 2 BÃ©zier control points.
  - Normalize the shape using its `normalize` method and assign colors to edges if you need a multi-channel SDF.
    This can be performed automatically using the `edgeColoringSimple` heuristic, or manually by setting each edge's
    `color` member. Keep in mind that at least two color channels must be turned on in each edge, and iff two edges meet
@@ -145,6 +147,7 @@ The following is an example GLSL fragment shader including anti-aliasing:
 in vec2 pos;
 out vec4 color;
 uniform sampler2D msdf;
+uniform float pxRange;
 uniform vec4 bgColor;
 uniform vec4 fgColor;
 
@@ -153,12 +156,16 @@ float median(float r, float g, float b) {
 }
 
 void main() {
+    vec2 msdfUnit = pxRange/vec2(textureSize(msdf, 0));
     vec3 sample = texture(msdf, pos).rgb;
     float sigDist = median(sample.r, sample.g, sample.b) - 0.5;
-    float opacity = clamp(sigDist/fwidth(sigDist) + 0.5, 0.0, 1.0);
+    sigDist *= dot(msdfUnit, 0.5/fwidth(pos));
+    float opacity = clamp(sigDist + 0.5, 0.0, 1.0);
     color = mix(bgColor, fgColor, opacity);
 }
 ```
+
+**Note:** This is an example shader only and probably is not optimal for your use case! Please do not blindly copy & paste.
 
 ## Shape description syntax
 
@@ -168,7 +175,7 @@ The text shape description has the following syntax.
  - Points in a contour are separated with semicolons.
  - The last point of each contour must be equal to the first, or the symbol `#` can be used, which represents the first point.
  - There can be an edge segment specification between any two points, also separated by semicolons.
-   This can include the edge's color (`c`, `m`, `y` or `w`) and/or one or two Bézier curve control points inside parentheses.
+   This can include the edge's color (`c`, `m`, `y` or `w`) and/or one or two BÃ©zier curve control points inside parentheses.
    
 For example,
 ```
@@ -178,4 +185,4 @@ would represent a square with magenta and yellow edges,
 ```
 { 0, 1; (+1.6, -0.8; -1.6, -0.8); # }
 ```
-is a teardrop shape formed by a single cubic Bézier curve.
+is a teardrop shape formed by a single cubic BÃ©zier curve.
